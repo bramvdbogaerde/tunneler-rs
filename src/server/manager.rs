@@ -7,18 +7,15 @@ use tokio::{
     },
 };
 
-use tokio_util::codec::{Decoder, Framed};
-
+use crate::protocol::prelude::*;
 use crate::utils::error;
-use byteorder::{BigEndian, ReadBytesExt};
-use bytes::BytesMut;
-use futures::{prelude::*, stream::StreamExt};
+use futures::stream::StreamExt;
 use std::{
     collections::HashMap,
     io,
-    io::{Cursor, Read},
     sync::Arc,
 };
+
 
 #[derive(Debug, Clone)]
 struct Connection;
@@ -55,57 +52,6 @@ impl ManagerRef {
             .map_err(|_| ManagerError::SubmitRequestFailure)?;
 
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Frame {
-    /// the stream number, used to multiplex connections
-    stream: u64,
-    /// the length of the frame (in bytes, except for the header of the frame)
-    length: u64,
-    /// the contents of the frame
-    contents: Vec<u8>,
-}
-
-struct FrameDecoder;
-
-impl Decoder for FrameDecoder {
-    type Item = Frame;
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let src_length = src.len();
-        let mut cursor = Cursor::new(src);
-        let stream: u64 = if src_length >= 8 {
-            cursor
-                .read_u64::<BigEndian>()
-                .map_err(|_| error("could not read stream id"))?
-        } else {
-            return Ok(None);
-        };
-
-        let length: u64 = if src_length >= 16 {
-            cursor
-                .read_u64::<BigEndian>()
-                .map_err(|_| error("could not read length of frame"))?
-        } else {
-            return Ok(None);
-        };
-
-        let contents: Vec<u8> = if src_length as u64 >= 16 + length {
-            let mut output = vec![0 as u8; length as usize];
-            cursor.read_exact(&mut output)?;
-            output
-        } else {
-            return Ok(None);
-        };
-
-        Ok(Some(Frame {
-            stream,
-            length,
-            contents,
-        }))
     }
 }
 
@@ -146,7 +92,7 @@ impl Manager {
     }
 
     async fn process(&self, socket: TcpStream) -> io::Result<()> {
-        let mut stream = Framed::new(socket, FrameDecoder);
+        let mut stream = Framed::new(socket, FrameCodec);
         // TODO: do some clean up when stream closes
         loop {
             let frame: Frame = stream
@@ -154,14 +100,16 @@ impl Manager {
                 .await
                 .ok_or_else(|| error("stream closed"))??;
 
-            todo!()
+            println!("Got a frame {:?}", frame);
+            println!("The message was {}", String::from_utf8(frame.contents).unwrap())
+
         }
-        Ok(())
     }
 
     pub async fn listen(&self) -> io::Result<()> {
         // TODO: make the bind host and port configurable
         let listener = TcpListener::bind("127.0.0.1:5555").await?;
+        println!("Starting to listen for connections on localhost:5555");
         loop {
             let (socket, _) = listener.accept().await?;
             let this = self.clone();
